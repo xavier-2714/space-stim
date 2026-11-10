@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Space Stim</title>
+<style>
+  :root { --amber:#f0c070; --teal:#5fd8c8; --ink:#0d1216; --panel:rgba(13,18,22,.88); --line:rgba(240,192,112,.45); --dim:#9aa4a8; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; overflow:hidden; background:#000; color:#e9e4d6; font-family:"Futura","Gill Sans","Trebuchet MS",sans-serif; }
+  canvas#c { position:fixed; inset:0; width:100%; height:100%; display:block; }
+  #hud { position:fixed; inset:0; pointer-events:none; text-shadow:0 1px 3px #000; }
+  #loc { position:absolute; left:18px; top:14px; font-size:13px; letter-spacing:.14em; text-transform:uppercase; }
+  #loc b { display:block; font-size:19px; color:var(--amber); letter-spacing:.2em; font-weight:600; }
+  #loc i { font-style:normal; color:var(--dim); font-size:11px; }
+  #status { position:absolute; right:18px; top:14px; text-align:right; font-size:13px; letter-spacing:.1em; }
+  #status b { color:var(--amber); font-size:17px; }
+  #status span { display:block; color:var(--dim); font-size:11px; text-transform:uppercase; margin-top:2px; }
+  #flight { position:absolute; left:50%; bottom:20px; transform:translateX(-50%); display:none; gap:22px; align-items:flex-end; padding:8px 18px; background:rgba(13,18,22,.55); border:1px solid var(--line); border-radius:3px; font-variant-numeric:tabular-nums; }
+  #flight div { text-align:center; min-width:74px; white-space:nowrap; }
+  #flight small { display:block; font-size:10px; letter-spacing:.18em; color:var(--dim); }
+  #flight b { font-size:20px; color:var(--amber); font-weight:500; }
+  #thr { width:120px; height:8px; border:1px solid var(--line); margin:6px auto 3px; position:relative; }
+  #thr i { position:absolute; left:20%; top:0; bottom:0; background:var(--amber); }
+  #thr u { position:absolute; left:20%; top:-3px; bottom:-3px; width:1px; background:var(--dim); }
+  #mode { color:var(--teal) !important; font-size:13px !important; letter-spacing:.14em; }
+  #ret { position:absolute; left:50%; top:50%; width:6px; height:6px; margin:-3px; border-radius:50%; background:rgba(255,255,255,.75); }
+  #ret.fly { width:26px; height:26px; margin:-13px; background:none; border:1px solid rgba(240,192,112,.7); }
+  #stick { position:absolute; width:8px; height:8px; margin:-4px; border-radius:50%; background:var(--teal); display:none; }
+  .mk { position:absolute; transform:translate(-50%,-50%); font-size:11px; letter-spacing:.12em; text-transform:uppercase; white-space:nowrap; text-align:center; }
+  .mk::before { content:""; display:block; width:14px; height:14px; margin:0 auto 3px; border:1.5px solid currentColor; transform:rotate(45deg); }
+  .mk.off::before { border-radius:50%; width:8px; height:8px; background:currentColor; }
+  .mk small { display:block; color:#cfd6d8; font-size:10px; }
+  #prompt { position:absolute; left:50%; top:60%; transform:translateX(-50%); padding:7px 14px; background:var(--panel); border:1px solid var(--line); border-radius:3px; font-size:14px; letter-spacing:.06em; display:none; }
+  #prompt kbd, #hint kbd, .keys kbd { display:inline-block; min-width:22px; padding:1px 6px; margin-right:6px; border:1px solid var(--amber); border-radius:3px; color:var(--amber); font:600 12px/18px "Menlo",monospace; text-align:center; }
+  #hint { position:absolute; left:50%; bottom:112px; transform:translateX(-50%); font-size:13px; letter-spacing:.06em; color:#dfe4e2; text-align:center; white-space:nowrap; }
+  #toasts { position:absolute; left:50%; top:76px; transform:translateX(-50%); display:flex; flex-direction:column; gap:6px; align-items:center; }
+  .toast { padding:7px 16px; background:var(--panel); border-left:3px solid var(--amber); font-size:14px; letter-spacing:.05em; animation:tin .25s; max-width:70vw; }
+  .toast.good { border-color:var(--teal); } .toast b { color:var(--amber); }
+  .toast small { display:block; color:var(--dim); font-size:12px; margin-top:2px; max-width:520px; }
+  @keyframes tin { from { opacity:0; transform:translateY(-6px); } }
+  #jump { position:absolute; left:50%; top:22%; transform:translateX(-50%); text-align:center; font-size:13px; letter-spacing:.16em; text-transform:uppercase; display:none; }
+  #jump div { width:260px; height:6px; border:1px solid var(--teal); margin:6px auto; } #jump i { display:block; height:100%; width:0; background:var(--teal); }
+  #fade { position:fixed; inset:0; background:#fff; opacity:0; pointer-events:none; }
+  #modal { position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,.35); }
+  .panel { width:min(680px,92vw); max-height:86vh; overflow:auto; background:var(--panel); border:1px solid var(--line); border-top:3px solid var(--amber); padding:22px 26px; border-radius:3px; }
+  .panel h2 { margin:0; font-size:20px; letter-spacing:.16em; text-transform:uppercase; color:var(--amber); font-weight:600; }
+  .panel h3 { margin:16px 0 6px; font-size:12px; letter-spacing:.2em; text-transform:uppercase; color:var(--teal); font-weight:600; }
+  .panel .sub { color:var(--dim); font-size:12px; letter-spacing:.14em; text-transform:uppercase; margin-top:3px; }
+  .panel p { line-height:1.55; font-size:15px; margin:14px 0; }
+  .opt { display:block; width:100%; text-align:left; margin:6px 0; padding:9px 12px; background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.14); color:#e9e4d6; font:inherit; font-size:14px; cursor:pointer; border-radius:3px; }
+  .opt:hover { border-color:var(--amber); background:rgba(240,192,112,.1); } .opt b { color:var(--amber); margin-right:10px; font-family:Menlo,monospace; }
+  .opt:disabled { opacity:.45; cursor:default; }
+  table { width:100%; border-collapse:collapse; font-size:14px; font-variant-numeric:tabular-nums; } td,th { padding:6px 6px; border-bottom:1px solid rgba(255,255,255,.08); text-align:left; }
+  th { font-size:10px; letter-spacing:.16em; color:var(--dim); text-transform:uppercase; font-weight:500; } td.n { text-align:right; }
+  .btn { padding:4px 11px; background:none; border:1px solid var(--line); color:var(--amber); font:inherit; font-size:12px; letter-spacing:.1em; cursor:pointer; border-radius:3px; text-transform:uppercase; }
+  .btn:hover:not(:disabled) { background:rgba(240,192,112,.14); } .btn:disabled { opacity:.35; cursor:default; }
+  .row { display:flex; justify-content:space-between; gap:12px; align-items:center; padding:8px 0; border-bottom:1px solid rgba(255,255,255,.08); font-size:14px; } .row small { display:block; color:var(--dim); font-size:12px; }
+  .keys { display:grid; grid-template-columns:1fr 1fr; gap:4px 24px; font-size:13px; } .keys div { padding:2px 0; }
+  .foot { margin-top:14px; color:var(--dim); font-size:12px; }
+  #map { position:fixed; inset:0; display:none; background:#05070a; }
+  #mapc { width:100%; height:100%; display:block; cursor:grab; }
+  #mapinfo { position:absolute; right:18px; top:18px; width:330px; background:var(--panel); border:1px solid var(--line); border-top:3px solid var(--amber); padding:16px 18px; border-radius:3px; font-size:13px; line-height:1.5; }
+  #mapinfo h2 { margin:0 0 2px; font-size:19px; letter-spacing:.14em; color:var(--amber); text-transform:uppercase; }
+  .tag { display:inline-block; padding:1px 8px; font-size:10px; letter-spacing:.14em; text-transform:uppercase; border:1px solid; border-radius:10px; margin:4px 0 8px; }
+  .tag.book { color:var(--amber); } .tag.inv { color:var(--teal); }
+  #maphead { position:absolute; left:18px; top:14px; font-size:13px; letter-spacing:.16em; text-transform:uppercase; } #maphead b { display:block; color:var(--amber); font-size:19px; }
+  #mapleg { position:absolute; left:18px; bottom:14px; font-size:12px; color:var(--dim); line-height:1.7; }
+  #title { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; background:radial-gradient(ellipse at 50% 60%, #1a2230 0%, #05070a 70%); text-align:center; padding:20px; }
+  #title h1 { font-size:clamp(34px,8vw,60px); letter-spacing:.3em; margin:0 0 0 .3em; color:var(--amber); font-weight:500; }
+  #title p { color:#cfd3cf; max-width:560px; line-height:1.6; font-size:15px; } #title small { color:var(--dim); font-size:12px; max-width:560px; line-height:1.5; }
+  #title button { margin:18px 6px 20px; padding:12px 34px; font:inherit; font-size:15px; letter-spacing:.24em; text-transform:uppercase; background:none; color:var(--amber); border:1px solid var(--amber); cursor:pointer; border-radius:3px; }
+  #title button:hover { background:rgba(240,192,112,.15); } #title button.sec { color:var(--dim); border-color:var(--dim); font-size:12px; padding:8px 18px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">
+  <div id="loc"></div><div id="status"></div>
+  <div id="ret"></div><div id="stick"></div><div id="markers"></div>
+  <div id="jump"><span></span><div><i></i></div></div>
+  <div id="toasts"></div><div id="prompt"></div><div id="hint"></div>
+  <div id="flight">
+    <div><small>SPEED</small><b id="spd">0</b></div>
+    <div><small>THROTTLE</small><div id="thr"><i></i><u></u></div><b id="mode"></b></div>
+    <div><small id="altl">ALTITUDE</small><b id="alt">0</b></div>
+  </div>
+</div>
+<div id="fade"></div>
+<div id="map"><canvas id="mapc"></canvas><div id="maphead"><b>Galactic Chart</b><span id="mapsub"></span></div><div id="mapinfo"></div>
+  <div id="mapleg">◆ world named in Asimov's <i>Foundation</i> &nbsp;·&nbsp; ○ world invented for this game<br>Drag to pan · scroll to zoom · click a star · <b>M</b> or <b>Esc</b> to close</div></div>
+<div id="modal"></div>
+<div id="title">
+  <h1>SPACE STIM</h1>
+  <p>A spacer's life in the Galactic Empire. You own one old light hauler, parked in Bay 3 of the Terminus City spaceport, at the very edge of the Galaxy. Where you take her is your business.</p>
+  <div><button id="start">Begin</button></div>
+  <div><button id="reset" class="sec" style="display:none">Start a new life (erase save)</button></div>
+  <small>An unofficial fan-made game set in the world of Isaac Asimov's novel <i>Foundation</i>. Places and politics follow the book; all characters you meet, dialogue, and minor worlds are original to this game and are marked as such on the chart.</small>
+</div>
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.js" } }</script>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
