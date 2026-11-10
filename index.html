@@ -71,6 +71,10 @@
   #title p { color:#cfd3cf; max-width:560px; line-height:1.6; font-size:15px; } #title small { color:var(--dim); font-size:12px; max-width:560px; line-height:1.5; }
   #title button { margin:18px 6px 20px; padding:12px 34px; font:inherit; font-size:15px; letter-spacing:.24em; text-transform:uppercase; background:none; color:var(--amber); border:1px solid var(--amber); cursor:pointer; border-radius:3px; }
   #title button:hover { background:rgba(240,192,112,.15); } #title button.sec { color:var(--dim); border-color:var(--dim); font-size:12px; padding:8px 18px; }
+  #multiplayer { max-width: min(480px, 90vw); margin-bottom:16px; }
+  #multiplayer button { margin:3px 4px 9px; }
+  #room-invite { width:100%; box-sizing:border-box; background:#131c26; color:#f4dfbf; border:1px solid #6e6555; padding:7px; }
+  #crew-status { position:fixed; bottom:18px; left:18px; max-width:250px; color:#a8e0d9; font-size:11px; letter-spacing:.08em; pointer-events:none; }
 </style>
 </head>
 <body>
@@ -90,10 +94,17 @@
 <div id="map"><canvas id="mapc"></canvas><div id="maphead"><b>Galactic Chart</b><span id="mapsub"></span></div><div id="mapinfo"></div>
   <div id="mapleg">◆ world named in Asimov's <i>Foundation</i> &nbsp;·&nbsp; ○ world invented for this game<br>Drag to pan · scroll to zoom · click a star · <b>M</b> or <b>Esc</b> to close</div></div>
 <div id="modal"></div>
+<div id="crew-status" role="status"></div>
 <div id="title">
   <h1>SPACE STIM</h1>
   <p>A spacer's life in the Galactic Empire. You own one old light hauler, parked in Bay 3 of the Terminus City spaceport, at the very edge of the Galaxy. Where you take her is your business.</p>
   <div><button id="start">Begin</button></div>
+  <div id="multiplayer">
+    <button id="host-room" class="sec">Host private co-op</button>
+    <button id="join-room" class="sec" hidden>Join crew</button>
+    <div><small id="room-status" role="status"></small></div>
+    <input id="room-invite" aria-label="Crew invite link" title="Copy this link to invite a friend" readonly hidden onclick="this.select()">
+  </div>
   <div><button id="reset" class="sec" style="display:none">Start a new life (erase save)</button></div>
   <small>An unofficial fan-made game set in the world of Isaac Asimov's novel <i>Foundation</i>. The chart identifies original destinations and the Middle-earth crossover on Korell.</small>
 </div>

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { G, clamp, lerp, smooth, moveBody } from './util.js';
 import { SYS, dist } from './data.js';
 import { Explorer, clipBoom } from './explorer.js';
+import { Multiplayer } from './multiplayer.js';
 import { Ship } from './ship.js';
 import { Surface } from './world.js';
 import { Backdrop, SpaceScene, Tunnel, PLANET_R } from './space.js';
@@ -19,6 +20,7 @@ const newSave = () => ({ credits: 600, cargo: {}, up: { drive: 0, engine: 0, hol
 let saved = null; try { saved = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch (e) { /* fresh start */ }
 G.save = saved && SYS[saved.sys] ? { ...newSave(), ...saved } : newSave();
 function persist() {
+  if (!G.started || multiplayer.role === 'guest') return;
   const s = G.save; s.sys = G.sys.id;
   s.where = G.mode === 'surface' && ship.landed ? 'landed' : 'space';
   if (s.where === 'landed') s.shipPos = { x: ship.pos.x, y: ship.pos.y, z: ship.pos.z, yaw: ship.yaw };
@@ -43,6 +45,7 @@ sun.shadow.bias = -0.00015;
 const backdrop = new Backdrop(scene);
 const ship = new Ship(); scene.add(ship.group);
 const explorer = new Explorer(); scene.add(explorer.group);
+const multiplayer = new Multiplayer(scene, SYS);
 const tunnel = new Tunnel(); ship.group.add(tunnel.mesh);
 function resize() { renderer.setSize(innerWidth, innerHeight, false); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
 addEventListener('resize', resize); resize();
@@ -123,12 +126,12 @@ addEventListener('mousemove', (e) => {
 
 // ---------- interaction ----------
 const shipActs = [
-  { l: V().set(0, 2.3, -9.4), r: 2.3, label: () => 'Take the pilot\'s seat', act: () => sit() },
-  { l: V().set(2.9, 2.7, 6.1), r: 2.6, label: () => (ship.landed ? (ship.rampTarget ? 'Lower the ramp' : 'Raise the ramp') : null), act: () => { ship.rampTarget = ship.rampTarget ? 0 : 1; audio.sfx('ramp'); } },
+  { l: V().set(0, 2.3, -9.4), r: 2.3, label: () => multiplayer.role === 'guest' ? null : 'Take the pilot\'s seat', act: () => sit() },
+  { l: V().set(2.9, 2.7, 6.1), r: 2.6, label: () => (multiplayer.role !== 'guest' && ship.landed ? (ship.rampTarget ? 'Lower the ramp' : 'Raise the ramp') : null), act: () => { ship.rampTarget = ship.rampTarget ? 0 : 1; audio.sfx('ramp'); } },
   { l: V().set(-2.7, 2.6, -2.6), r: 2.2, label: () => 'Consult the galactic chart', act: () => ui.toggleMap(true) },
   { l: V().set(-2.6, 2.3, -5.6), r: 2.0, label: () => 'Rest in your bunk (save)', act: () => { persist(); ui.toast('You sleep a few hours. The ship ticks and cools around you. <small>Journey saved.</small>', true); } },
 ];
-function sit() { player.seated = true; player.frame = 'ship'; stick.x = stick.y = 0; camQ.copy(ship.quat); audio.sfx('ok'); }
+function sit() { if (multiplayer.role === 'guest') return; player.seated = true; player.frame = 'ship'; stick.x = stick.y = 0; camQ.copy(ship.quat); audio.sfx('ok'); }
 function stand() { player.seated = false; player.frame = 'ship'; player.x = 0; player.y = 1.4; player.z = -8.4; player.yaw = Math.PI; player.pitch = 0; player.vy = 0; ship.throttle = 0; ship.assist = null; if (!ship.landed) ui.toast('Drives idle. The ship will hold here.'); }
 function findInteract(eye, fwd) {
   let best = null, bd = 1e9;
@@ -167,7 +170,8 @@ function toSurface() {
 function onLanded() {
   audio.sfx('land'); shake = 0.5; persist();
   const p = G.surface.pad, atPort = Math.hypot(ship.pos.x - p.x, ship.pos.z - p.z) < 60;
-  ui.toast(`<b>Touchdown</b> — ${G.sys.name}${atPort ? ' spaceport' : ', open country'}<small>Ramp lowering. Press F to leave your seat.</small>`, true);
+  const next = multiplayer.role === 'guest' ? 'Ramp lowering. You can disembark when it opens.' : 'Ramp lowering. Press F to leave your seat.';
+  ui.toast(`<b>Touchdown</b> — ${G.sys.name}${atPort ? ' spaceport' : ', open country'}<small>${next}</small>`, true);
 }
 
 // ---------- hyperspace ----------
@@ -198,6 +202,61 @@ function updateHyper(dt) {
   }
   h.flash = Math.max(0, h.flash - dt * 1.6); ui.fade('#eaf2ff', h.flash); tunnel.update(dt, k);
   camera.fov = 70 + 38 * k; camera.updateProjectionMatrix();
+}
+
+// The host simulates the ship. Passengers only simulate their own walking.
+const networkPosition = V(), networkRotation = new THREE.Quaternion();
+let passengerReady = false, previousShipSnapshot = null;
+function followHost(dt) {
+  const s = multiplayer.snapshot;
+  if (!s) return;
+  const first = !passengerReady, changedSystem = G.sys.id !== s.system;
+  const changedMode = G.mode !== s.mode;
+  const oldMode = G.mode;
+  if (first) G.save = newSave();
+  if (changedSystem) {
+    disposeSystem();
+    G.sys = SYS[s.system];
+    G.save.visited[s.system] = 1;
+    backdrop.setSystem(G.sys);
+  }
+  if (first || changedSystem || changedMode) {
+    if (s.mode === 'surface') ensureSurface();
+    else if (s.mode === 'space') ensureSpace();
+    setMode(s.mode);
+    backdrop.stars.visible = backdrop.lens.visible = false;
+    if (G.started && !first) {
+      audio.sfx(s.mode === 'hyper' ? 'jump' : oldMode === 'hyper' ? 'arrive' : 'whoosh');
+      transition(s.mode === 'surface' ? '#ffd2a8' : '#080c19', 0.25, () => {});
+    }
+  }
+  networkPosition.fromArray(s.pos);
+  networkRotation.fromArray(s.quat).normalize();
+  const snap = first || changedSystem || changedMode || ship.pos.distanceToSquared(networkPosition) > 640000;
+  const blend = snap ? 1 : 1 - Math.exp(-23 * dt);
+  ship.pos.lerp(networkPosition, blend);
+  ship.quat.slerp(networkRotation, blend);
+  ship.vel.fromArray(s.vel);
+  ship.yaw = s.yaw;
+  ship.throttle = s.throttle;
+  ship.landed = s.landed;
+  ship.setRamp(clamp(s.ramp, 0, 1));
+  ship.updateEffects();
+  ship.group.updateMatrixWorld(true);
+  if (first && s.mode === 'surface' && s.landed) {
+    standBesideShip();
+    const w = ship.group.localToWorld(_a.set(-8.5, 0, 20));
+    player.x = w.x; player.z = w.z; player.y = G.surface.h(w.x, w.z); player.yaw = ship.yaw - 0.58;
+  } else if (first || (player.frame === 'world' && !s.landed)) {
+    Object.assign(player, { frame: 'ship', x: 0, y: 1.4, z: 3, yaw: 0, pitch: 0, vy: 0, speed: 0 });
+  }
+  player.seated = false;
+  passengerReady = true;
+  if (s !== previousShipSnapshot && previousShipSnapshot && !previousShipSnapshot.landed && s.landed && G.started) onLanded();
+  previousShipSnapshot = s;
+  const jump = s.jump;
+  tunnel.update(dt, jump <= 0 ? 0 : jump < 1.9 ? jump / 1.9 : jump < 6.3 ? 1 : clamp(1 - (jump - 6.3) / 1.6, 0, 1));
+  scene.background.set(s.mode === 'hyper' ? 0x151126 : 0x000000);
 }
 
 // ---------- per-frame ----------
@@ -314,24 +373,42 @@ const km = (d) => (d >= 10000 ? (d / 1000).toFixed(0) + ' km' : d >= 1000 ? (d /
 function tick(now) {
   requestAnimationFrame(tick);
   const dt = Math.min(0.05, (now - (tick.last || now)) / 1000); tick.last = now;
-  if (!G.started) { renderer.render(scene, camera); return; }
+  const passenger = multiplayer.role === 'guest';
+  if (passenger) followHost(dt);
+  if (!G.started) {
+    multiplayer.publish(now, G);
+    updateCamera(dt);
+    multiplayer.renderPeer(dt, G);
+    renderer.render(scene, camera);
+    return;
+  }
   const blocked = !!(ui.modal || ui.mapOpen);
   if (G.trans) { const T = G.trans; T.t += dt; if (!T.done && T.t >= T.half) { T.done = true; T.mid(); } const op = T.t < T.half ? T.t / T.half : 1 - (T.t - T.half - 0.15) / (T.half * 1.4); ui.fade(T.color, clamp(op, 0, 1)); if (op <= 0) G.trans = null; }
   if (G.hyper) updateHyper(dt);
 
   // --- ship ---
-  let inp = null; const flying = player.seated && !blocked && !G.hyper && !(G.trans && !G.trans.done);
+  let inp = null; const flying = !passenger && player.seated && !blocked && !G.hyper && !(G.trans && !G.trans.done);
   if (flying) {
     inp = flightInput(dt);
-    if (ship.landed && inp.vert > 0 && G.mode === 'surface') { ship.liftOff(); audio.sfx('ramp'); ui.toast('Lifting off. <small>W for throttle · point the nose up and climb to leave the atmosphere.</small>'); }
+    if (ship.landed && inp.vert > 0 && G.mode === 'surface') {
+      if (multiplayer.paired && (multiplayer.remote?.frame !== 'ship' || multiplayer.remote.z >= 6.5)) {
+        inp.vert = 0;
+        if (now - lastEvt > 1800) { lastEvt = now; ui.toast('Wait for your crewmate to board before takeoff.'); }
+      } else {
+        ship.liftOff(); audio.sfx('ramp');
+        ui.toast('Lifting off. <small>W for throttle · point the nose up and climb to leave the atmosphere.</small>');
+      }
+    }
   }
   let env = spaceEnv; if (G.mode === 'surface') { surfEnv.solids = G.surface.solids; env = surfEnv; }
-  const ev = ship.update(dt, G.hyper ? null : inp, env);
+  const ev = passenger ? null : ship.update(dt, G.hyper ? null : inp, env);
   if (ev === 'land') onLanded();
   else if (ev && now - lastEvt > 700) { lastEvt = now; if (ev === 'uneven') ui.toast('Ground too uneven to set down here.'); else { shake = 0.8; audio.sfx('bump'); } }
   ship.group.updateMatrixWorld(true);
   if (!player.seated && !blocked && !G.trans) updatePlayer(dt);
   updateCamera(dt);
+  multiplayer.publish(now, G);
+  multiplayer.renderPeer(dt, G);
   if (sun.castShadow) {
     const shadowX = Math.round(eye.x * 4) / 4, shadowZ = Math.round(eye.z * 4) / 4;
     sun.target.position.set(shadowX, G.surface.h(shadowX, shadowZ), shadowZ);
@@ -344,11 +421,11 @@ function tick(now) {
     const S = G.surface, e = S.env; S.update(dt, eye);
     const alt = smooth(500, 2600, eye.y - (S.pad.y || 0)); backdrop.set(e, alt); scene.fog.far = e.fogFar * (1 + alt * 3); scene.fog.color.set(e.fog).multiplyScalar(1 - alt * 0.85);
     hemi.intensity = e.hemi * (1 - alt * 0.6);
-    if (!ship.landed && ship.pos.y - (S.pad.y || 0) > 2600 && !G.trans) toSpace();
+    if (!passenger && !ship.landed && ship.pos.y - (S.pad.y || 0) > 2600 && !G.trans) toSpace();
     if (!player.seated) {
       if ((poiT += dt) > 0.4) { poiT = 0; for (const p of S.pois) if (!G.save.found[p.id] && Math.hypot(eye.x - p.x, eye.z - p.z) < p.r && (p.y === null || Math.abs(eye.y - 1.6 - p.y) < 8)) { G.save.found[p.id] = 1; G.save.credits += p.reward; G.changed(); audio.sfx('found'); ui.toast(`Discovered: <b>${p.name}</b> · +${p.reward} cr<small>${p.text}</small>`, true, 8000); } }
       const ds = Math.hypot(eye.x - ship.pos.x, eye.z - ship.pos.z); if (ds > 60 && eye.y > -20 && eye.y < 300) marker(marks, _a.copy(ship.pos).setY(ship.pos.y + 9), 'Your ship', km(ds), '#5fd8c8');
-      if (player.frame === 'world' && ds < 40 && !G.save.found[G.sys.id + ':boarded']) hint = 'Walk up the ramp at the rear of your ship and take the pilot\'s seat';
+      if (player.frame === 'world' && ds < 40 && !G.save.found[G.sys.id + ':boarded']) hint = passenger ? 'Walk up the rear ramp to board your friend’s ship' : 'Walk up the ramp at the rear of your ship and take the pilot\'s seat';
     } else {
       G.save.found[G.sys.id + ':boarded'] = 1;
       const p = S.pad, dp = Math.hypot(ship.pos.x - p.x, ship.pos.z - p.z);
@@ -359,9 +436,9 @@ function tick(now) {
   } else if (G.mode === 'space') {
     const S = G.space; S.update(dt); backdrop.set(null, 1);
     const d = ship.pos.length();
-    if (d < R + 320 && !G.trans && !G.hyper) toSurface();
-    for (const b of S.bodies) { const bd = ship.pos.distanceTo(b.pos); if (bd < b.r + 25) { _a.copy(ship.pos).sub(b.pos).normalize(); ship.pos.copy(b.pos).addScaledVector(_a, b.r + 25); ship.vel.reflect(_a).multiplyScalar(0.3); ship.throttle = 0; shake = 1; audio.sfx('bump'); } else if (bd < 60000) marker(marks, b.pos, b.name, km(bd - b.r), '#9aa4a8'); }
-    if (S.station) { const sd = ship.pos.distanceTo(S.station.position); if (sd < 235) { _a.copy(ship.pos).sub(S.station.position).normalize(); ship.pos.copy(S.station.position).addScaledVector(_a, 235); ship.vel.multiplyScalar(0.3); } marker(marks, S.station.position, S.stationName, km(sd), '#5fd8c8'); }
+    if (!passenger && d < R + 320 && !G.trans && !G.hyper) toSurface();
+    for (const b of S.bodies) { const bd = ship.pos.distanceTo(b.pos); if (!passenger && bd < b.r + 25) { _a.copy(ship.pos).sub(b.pos).normalize(); ship.pos.copy(b.pos).addScaledVector(_a, b.r + 25); ship.vel.reflect(_a).multiplyScalar(0.3); ship.throttle = 0; shake = 1; audio.sfx('bump'); } else if (bd < 60000) marker(marks, b.pos, b.name, km(bd - b.r), '#9aa4a8'); }
+    if (S.station) { const sd = ship.pos.distanceTo(S.station.position); if (!passenger && sd < 235) { _a.copy(ship.pos).sub(S.station.position).normalize(); ship.pos.copy(S.station.position).addScaledVector(_a, 235); ship.vel.multiplyScalar(0.3); } marker(marks, S.station.position, S.stationName, km(sd), '#5fd8c8'); }
     marker(marks, _a.set(0, 0, 0), G.sys.name, km(d - R) + ' · fly in to land', '#f0c070');
     for (const j of G.save.jobs) if (j.type === 'survey' && j.to === G.sys.id && d < R + 9000) { G.save.jobs = G.save.jobs.filter((x) => x !== j); G.save.surveyed[G.sys.id] = 1; G.save.credits += j.reward; G.changed(); audio.sfx('coin'); ui.toast(`Survey complete: <b>${G.sys.name}</b> · +${fmt(j.reward)} cr<small>Scanner record sealed and credited.</small>`, true, 7000); }
     if (player.seated && !G.hyper) {
@@ -388,7 +465,7 @@ function tick(now) {
   if (fl) fl.stick = document.pointerLockElement === canvas ? [stick.x, stick.y] : null;
   ui.flight(G.hyper ? null : fl); ui.jump(jumpText, charge);
   const h = G.sys.hand;
-  ui.loc(G.hyper && G.hyper.stage === 1 ? 'Hyperspace' : G.sys.name, G.hyper && G.hyper.stage === 1 ? 'between the stars' : G.mode === 'surface' ? (h === 'terminus' ? 'Terminus City' : h === 'anacreon' ? 'Royal capital' : h === 'trantor' ? (eye.y < -20 ? 'The Concourse · sub-level' : eye.y > 300 ? 'Observation Tower' : 'Sector Dock 12') : h === 'korell' ? 'Middle-earth · The Shire' : 'Landing field') : 'In orbit');
+  ui.loc(G.mode === 'hyper' ? 'Hyperspace' : G.sys.name, G.mode === 'hyper' ? 'between the stars' : G.mode === 'surface' ? (h === 'terminus' ? 'Terminus City' : h === 'anacreon' ? 'Royal capital' : h === 'trantor' ? (eye.y < -20 ? 'The Concourse · sub-level' : eye.y > 300 ? 'Observation Tower' : 'Sector Dock 12') : h === 'korell' ? 'Middle-earth · The Shire' : 'Landing field') : 'In orbit');
   ui.status();
   // --- audio ---
   const inAir = !ship.landed && !ship.docked, thr = player.seated || inAir ? clamp(Math.abs(ship.throttle) + (inp ? Math.abs(inp.vert) * 0.4 : 0) + (G.hyper ? 1 : 0), 0.06, 1.4) : 0;
@@ -405,11 +482,13 @@ function boot() {
   if (s.where === 'landed') { ensureSurface(); setMode('surface'); placeLanded(s.shipPos || G.surface.pad); standBesideShip(); }
   else { ensureSpace(); setMode('space'); const d = G.space.launchDir; ship.landed = false; ship.setRamp(1); ship.rampTarget = 1; ship.pos.copy(d).multiplyScalar(R + 3000); ship.quat.setFromUnitVectors(_a.set(0, 0, -1), d); sit(); }
   G.changed(); updateCamera(0.016);
-  if (saved) { $('reset').style.display = 'inline-block'; $('start').textContent = 'Continue'; }
+  if (saved && !multiplayer.roomParam) { $('reset').style.display = 'inline-block'; $('start').textContent = 'Continue'; }
   $('reset').onclick = () => { if (confirm('Erase your saved journey and start again on Terminus?')) { localStorage.removeItem(SAVE_KEY); location.reload(); } };
   $('start').onclick = () => {
+    if (multiplayer.roomParam && !passengerReady) return;
     audio.init(); G.started = true; $('title').style.display = 'none'; G.relock();
-    if (!saved) { ui.toast('<b>Terminus City Spaceport, Bay 3</b><small>Your ship is in front of you. Press H at any time for the controls.</small>', false, 9000); }
+    if (multiplayer.role === 'guest') ui.toast('You joined as passenger. Your friend pilots the ship.');
+    else if (!saved) { ui.toast('<b>Terminus City Spaceport, Bay 3</b><small>Your ship is in front of you. Press H at any time for the controls.</small>', false, 9000); }
     else ui.toast(`<b>${G.sys.name}</b><small>Welcome back, spacer.</small>`);
   };
   addEventListener('beforeunload', () => { if (G.started && !G.hyper) persist(); });

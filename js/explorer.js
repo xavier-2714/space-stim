@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 
 export class Explorer {
-  constructor() {
+  constructor(jacket = 0x64746a) {
     this.group = new THREE.Group();
     this.phase = 0;
-    const fabric = new THREE.MeshStandardMaterial({ color: 0x64746a, roughness: 0.94 });
+    const fabric = new THREE.MeshStandardMaterial({ color: jacket, roughness: 0.94 });
     const leather = new THREE.MeshStandardMaterial({ color: 0x30312e, roughness: 0.86 });
     const trim = new THREE.MeshStandardMaterial({ color: 0xaa7945, roughness: 0.68 });
     const skin = new THREE.MeshStandardMaterial({ color: 0xb98464, roughness: 0.85 });

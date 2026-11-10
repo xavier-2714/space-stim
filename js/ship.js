@@ -144,6 +144,12 @@ export class Ship {
   liftOff() { this.landed = false; this.rampTarget = 1; this.vel.set(0, 6, 0); this.pos.y += 0.3; this.grace = 1.2; }
 
   // inp: {pitch,yaw,roll,thr,boost,vert,stop}; env: {atmo, vmax, ground(x,z,y)|null, solids|null, flat(x,z,yaw)}
+  updateEffects(inp = null) {
+    const thr = Math.abs(this.throttle) + (inp ? Math.abs(inp.vert) * 0.3 : 0);
+    this.glowMat.color.setRGB(0.25 + thr * 1.1, 0.12 + thr * 0.6, 0.06 + thr * 0.3);
+    for (const p of this.plumes) { p.scale.set(1, 0.12 + thr * (inp && inp.boost ? 1.5 : 0.7), 1); p.position.z = 9.1 + 3.5 * p.scale.y; p.visible = !this.landed && thr > 0.03; }
+  }
+
   update(dt, inp, env) {
     // ramp + settle animation always
     if (this.ramp !== this.rampTarget) this.setRamp(clamp(this.ramp + Math.sign(this.rampTarget - this.ramp) * dt / 2.2, 0, 1));
@@ -152,9 +158,7 @@ export class Ship {
       _q.setFromEuler(_e.set(0, this.yaw, 0)); this.quat.copy(this.settleFrom).slerp(_q, this.settle);
       if (this.settle >= 1) this.settle = 0;
     }
-    const thr = Math.abs(this.throttle) + (inp ? Math.abs(inp.vert) * 0.3 : 0);
-    this.glowMat.color.setRGB(0.25 + thr * 1.1, 0.12 + thr * 0.6, 0.06 + thr * 0.3);
-    for (const p of this.plumes) { p.scale.set(1, 0.12 + thr * (inp && inp.boost ? 1.5 : 0.7), 1); p.position.z = 9.1 + 3.5 * p.scale.y; p.visible = !this.landed && thr > 0.03; }
+    this.updateEffects(inp);
     if (this.landed || this.docked) return null;
     let event = null; this.grace = Math.max(0, (this.grace || 0) - dt);
     if (this.assist && env.atmo) { this.runAssist(dt, env); inp = null; }
