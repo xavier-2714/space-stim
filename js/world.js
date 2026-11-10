@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { G, Batch, MAT, makeWindowMats, signMesh, canvasTex, rng, hashStr, fbm2, noise2, smooth, clamp, lerp } from './util.js';
+import { shireMaterial, shireWater } from './shire-materials.js';
 import { NPCS } from './data.js';
 
 // sky / light / terrain settings per planet type
@@ -10,6 +11,8 @@ export const ENV = {
     amp: 300, water: -14, waterCol: 0x2f6f9a, pal: [0x8c9a4c, 0xb09a5a, 0x9a6a48, 0xc9b8a0], town: 0x9a8a6c, trees: 0x4a6b33, flatR: 560 },
   trantor: { zen: 0x4d6a8c, hor: 0xc4ccd4, fog: 0xb4bdc6, fogFar: 9000, sun: [0.3, 0.55, 0.6], sunCol: 0xfff6ea, sunI: 2.2, hemi: 1.2, winI: 0.55, stars: 0,
     amp: 0, pal: [0x777c84, 0x777c84, 0x777c84, 0x777c84], town: 0x777c84, flatR: 99999, plate: 1 },
+  korell: { zen: 0x466e9b, hor: 0xe0d0a4, fog: 0xb1beb1, fogFar: 5200, clouds: true, sun: [-0.65, 0.36, 0.5], sunCol: 0xffdda0, sunI: 2.65, hemi: 0.9, winI: 0.35, stars: 0,
+    amp: 430, water: -2.1, waterCol: 0x37696b, pal: [0x697a3d, 0x89904b, 0x6a6b5c, 0xdde4de], town: 0x75854b, trees: 0x3c5729, flatR: 72 },
   cold: { zen: 0x3d6a96, hor: 0xd6dfe6, fog: 0xc4d0d8, fogFar: 6500, sun: [0.5, 0.35, -0.5], sunCol: 0xfff0dc, sunI: 2.2, hemi: 1.0, winI: 0.6, stars: 0,
     amp: 260, water: -8, waterCol: 0x3a6078, pal: [0x66785a, 0x7c8468, 0x858078, 0xe6eaec], town: 0x7c7a72, trees: 0x3f5f4a, flatR: 260 },
   warm: { zen: 0x2f6cc0, hor: 0xc4dcec, fog: 0xbdd2de, fogFar: 7000, sun: [-0.4, 0.7, 0.4], sunCol: 0xfff3da, sunI: 2.7, hemi: 1.1, winI: 0.2, stars: 0,
@@ -48,14 +51,24 @@ export class Surface {
     if (sys.hand === 'terminus') this.buildTerminus();
     else if (sys.hand === 'anacreon') this.buildAnacreon();
     else if (sys.hand === 'trantor') this.buildTrantor();
+    else if (sys.hand === 'korell') this.buildKorell();
     else this.buildOutpost();
-    this.scatter();
+    if (this.key !== 'korell') this.scatter();
     this.finalize();
   }
 
   // ---------- terrain ----------
   rawH(x, z) {
     const e = this.env; if (!e.amp) return 0;
+    if (this.key === 'korell') {
+      const river = -64 + 65 * Math.sin(x / 290) ** 3;
+      const bank = smooth(16, 60, Math.abs(z - river));
+      const hills = fbm2(x / 270, z / 270, 21, 4) * 100;
+      const local = smooth(185, 470, Math.hypot(x, z));
+      const ridge = Math.exp(-(((x - 2250) / 750) ** 2)) * smooth(450, 2000, Math.hypot(x, z));
+      const peaks = fbm2(x / 410, z / 530, 18, 5) * 860;
+      return -8 * (1 - bank) + bank * hills * local + ridge * peaks;
+    }
     const d = Math.hypot(x, z), f = smooth(e.flatR, e.flatR + 700, d);
     const base = e.lift || 0;
     let v = (fbm2(x / 900 + 31, z / 900 + 17, this.seed & 1023, 5) - 0.43) * e.amp;
@@ -63,7 +76,7 @@ export class Surface {
     return base + f * (v - (e.lift ? base * 0.9 : 0));
   }
   makeTerrain() {
-    const size = 16000, n = 256, cell = size / n, e = this.env;
+    const size = 16000, n = this.key === 'korell' ? 512 : 256, cell = size / n, e = this.env;
     this.tSize = size; this.tN = n; this.tCell = cell;
     const H = this.heights = new Float32Array((n + 1) * (n + 1));
     const pos = new Float32Array((n + 1) * (n + 1) * 3), uv = new Float32Array((n + 1) * (n + 1) * 2), idx = [];
@@ -97,14 +110,18 @@ export class Surface {
       for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) { const v = 205 + (r() * 45) | 0; x.fillStyle = `rgb(${v},${v},${v + 4})`; x.fillRect(i * 64 + 2, j * 64 + 2, 60, 60); }
       x.fillStyle = '#8a8f96'; for (let i = 0; i < 4; i++) { x.fillRect(i * 64, 0, 2, 256); x.fillRect(0, i * 64, 256, 2); }
     }, true);
-    const m = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ vertexColors: true, map: e.plate ? plateTex : grainTex }));
+    const shire = this.key === 'korell';
+    const m = new THREE.Mesh(g, shire ? shireMaterial(true) : new THREE.MeshLambertMaterial({ vertexColors: true, map: e.plate ? plateTex : grainTex }));
+    m.receiveShadow = shire;
     m.frustumCulled = false; this.group.add(m);
     // far skirt
     const edge = this.rawH(size / 2, 0);
     const sk = new THREE.Mesh(new THREE.PlaneGeometry(400000, 400000), new THREE.MeshLambertMaterial({ color: e.water !== undefined ? e.waterCol : P[1] }));
     sk.rotation.x = -Math.PI / 2; sk.position.y = (e.water ?? Math.min(edge, 0)) - 0.5; this.group.add(sk);
     if (e.water !== undefined) {
-      const w = new THREE.Mesh(new THREE.PlaneGeometry(size, size), new THREE.MeshLambertMaterial({ color: e.waterCol, transparent: true, opacity: 0.82 }));
+      const material = shire ? shireWater() : new THREE.MeshLambertMaterial({ color: e.waterCol, transparent: true, opacity: 0.82 });
+      const w = new THREE.Mesh(new THREE.PlaneGeometry(size, size), material);
+      if (shire) this.updaters.push((dt) => { material.uniforms.time.value += dt; });
       w.rotation.x = -Math.PI / 2; w.position.y = e.water; this.group.add(w);
     }
   }
@@ -473,6 +490,136 @@ export class Surface {
     S.poi('tower', 'Observation Tower', -300, -260, 30, 80, 'Metal to the horizon in every direction. Somewhere beyond it, a hundred square miles of open ground around the Imperial Palace — the only soil on the planet.', 400);
   }
 
+  // ---------- KORELL / MIDDLE-EARTH ----------
+  buildKorell() {
+    const S = this, r = rng(this.seed), stone = 0x8c8877, wood = 0x5e4230;
+    const B = S.b.solid;
+    S.pad = { x: 0, y: 0, z: 120, yaw: 0 };
+    S.padMark(0, 120, 'KORELL');
+    S.reserve(-32, 32, 94, 146);
+    S.reserve(-7, 7, -155, 100);
+    S.slab(0, 50, 5, 100, 0x9b8962);
+    S.slab(0, -136, 5, 50, 0x9b8962);
+    S.house(-25, 71, 12, 8, 4, stone, { door: 'e', k: 'solid', roof: wood });
+    S.sign('THE SHIRE · LANDING OFFICE', -18.8, 3.45, 71, Math.PI / 2, 7, 1);
+    S.npc('g_factor', -21, 71, { name: 'Shire Landing Steward' });
+
+    // The Water and its timber crossing.
+    S.box(0, -0.05, -62, 5, 0.3, 102, wood);
+    for (let z = -112; z <= -12; z += 1.55) {
+      B.box(0, 0.26, z, 5.1, 0.06, 1.48, [0x886749, 0x987752, 0x7b5b3d][(r() * 3) | 0]);
+    }
+    for (const x of [-2.5, 2.5]) {
+      S.box(x, 0.86, -62, 0.14, 0.17, 100, wood);
+      for (let z = -112; z <= -12; z += 5) S.box(x, -1.4, z, 0.27, 2.55, 0.27, wood);
+    }
+    S.poi('water', 'The Water', 0, -63, 22, 25, 'A timber crossing leads toward Hobbiton. Below, the current slides between low grassy banks.');
+
+    const doorRing = new THREE.TorusGeometry(1, 0.095, 10, 32);
+    const disk = new THREE.CircleGeometry(1, 32);
+    for (const [x, z, scale, color] of [[-24, -148, 1, 0x41643b], [22, -151, 1, 0x694b32], [53, -152, 1, 0x3d5f50], [-45, -164, 1, 0x79583e], [0, -177, 1.4, 0x466235]]) {
+      const y = S.h(x, z);
+      const front = z + 4 * scale;
+      S.house(x, z, 10 * scale, 8 * scale, 2.7 * scale, stone, { y, k: 'solid', dw: 1.8 * scale, dh: 2.1 * scale, roof: 0x5d733b, floor: 0x8a7659 });
+      B.geo(GEO.dome, x, y + 2.05 * scale, z - 0.35, 0x6b833c, { sx: 6.3 * scale, sy: 2.8 * scale, sz: 4.65 * scale });
+      for (let row = 0; row < 6; row++) for (let j = -7; j <= 7; j++) {
+        const dx = j * 0.68 + (row % 2) * 0.34, height = 0.24 + row * 0.43;
+        if (Math.abs(dx) > 4.78 || (Math.abs(dx) < 1.33 && height < 2.38) ||
+            (Math.abs(Math.abs(dx) - 3.2) < 0.73 && Math.abs(height - 1.55) < 0.72)) continue;
+        B.geo(GEO.rock, x + dx * scale, y + height * scale, front,
+          [0x776e5c, 0x978873, 0x9d8e78, 0x8f856e, 0x857e66][(r() * 5) | 0],
+          { sx: 0.49 * scale, sy: (0.26 + r() * 0.07) * scale, sz: 0.23 * scale, rz: (r() - 0.5) * 0.26 });
+      }
+      B.geo(doorRing, x, y + 1.08 * scale, front + 0.16, wood, { sx: 1.13 * scale, sy: 1.13 * scale, sz: 1.13 * scale });
+      B.box(x, y + 0.07, front + 0.52, 2.55 * scale, 0.16, 1.32 * scale, 0xa2937d);
+      // Open door leaf, hinged beside the entry.
+      B.geo(disk, x + 1.15 * scale, y + 1.08 * scale, front + 0.7, color, { sx: 1.06 * scale, sy: 1.06 * scale, ry: -1.1 });
+      B.geo(GEO.rock, x + 1.54 * scale, y + 1.12 * scale, front + 1.45, 0xc69b54, { sx: 0.11, sy: 0.11, sz: 0.11 });
+      for (const side of [-1, 1]) {
+        B.geo(doorRing, x + side * 3.2 * scale, y + 1.55 * scale, front + 0.05, wood, { sx: 0.54, sy: 0.54, sz: 0.54 });
+        const windowX = x + side * 3.2 * scale, windowY = y + 1.55 * scale;
+        S.b.glow.geo(disk, windowX, windowY, front + 0.058, 0xd7a35b, { sx: 0.49 * scale, sy: 0.49 * scale });
+        B.box(windowX, windowY, front + 0.10, 0.06, 0.98 * scale, 0.09, wood);
+        B.box(windowX, windowY, front + 0.10, 0.98 * scale, 0.06, 0.09, wood);
+        B.box(windowX, windowY - 0.65 * scale, front + 0.26, 1.5 * scale, 0.22, 0.52, wood);
+        for (let j = -2; j <= 2; j++) B.geo(GEO.rock, windowX + j * 0.23 * scale, windowY - 0.43 * scale, front + 0.29,
+          j % 2 ? 0xb25b49 : 0xd0a354, { sx: 0.17, sy: 0.13, sz: 0.16 });
+      }
+    }
+    S.sign('HOBBITON', 8, 2.2, -132, 0, 4.5, 0.9, { bg: '#55412f', fg: '#f0d9a4' });
+    S.npc('g_local', 9, -144, { y: S.h(9, -144), name: 'Hobbiton Gardener' });
+    S.poi('hobbiton', 'Hobbiton', 0, -146, 22, 35, 'Round windows glow under grass roofs. The path up the Hill leads to Bag End.');
+    S.poi('bag-end', 'Bag End', 0, -168, 8, 45, 'A green door stands open beneath the Hill. The landing field feels far away from here.');
+
+    // The Old Forest sits beyond a low dry-stone boundary and a break in the trees.
+    for (const side of [-1, 1]) for (let i = 0; i < 16; i++) {
+      const x = -127 + side * (5 + i * 1.4), z = -213;
+      B.geo(GEO.rock, x, S.h(x, z) + 0.5, z, i % 2 ? stone : 0x697256, { sx: 0.95, sy: 0.78, sz: 0.65, ry: r() * 6 });
+    }
+    S.sign('THE OLD FOREST', -121, S.h(-121, -210) + 2.1, -210, 0, 5, 1, { bg: '#4c432f', fg: '#eddbb4' });
+    S.poi('forest', 'The Old Forest', -127, -231, 19, 60, 'Just inside the boundary the branches close overhead. In the shade, the sound of the landing field disappears.');
+
+    const leaf = new THREE.IcosahedronGeometry(1, 1);
+    for (const side of [-1, 1]) {
+      const fenceZ = -126;
+      for (let i = 0; i < 9; i++) {
+        const x = side * (10 + i * 3.4);
+        B.box(x, S.h(x, fenceZ) + 0.58, fenceZ, 0.19, 1.25, 0.19, wood);
+      }
+      for (const height of [0.43, 0.92]) B.box(side * 23.6, height, fenceZ, 27.4, 0.12, 0.1, wood);
+      for (let row = 0; row < 4; row++) {
+        const x = side * (16 + row * 2.6);
+        B.box(x, 0.016, -133, 1.45, 0.04, 9, 0x584329);
+        for (let j = 0; j < 12; j++) B.geo(leaf, x + (r() - 0.5) * 0.7, 0.19, -137 + j * 0.7,
+          [0x55783b, 0x668448, 0x789652][j % 3], { sx: 0.28, sy: 0.24, sz: 0.26 });
+      }
+    }
+    for (let i = 0; i < 490; i++) {
+      const forest = i < 320;
+      const x = forest ? -155 + (r() - 0.5) * 350 : (r() - 0.5) * 1250;
+      const z = forest ? -420 + (r() - 0.5) * 390 : (r() - 0.5) * 1200;
+      const y = S.h(x, z);
+      if (y < -0.9 || !S.isFree(x, z, 5) || (Math.abs(x) < 74 && z > -203 && z < 151) || (Math.abs(x + 127) < 5 && z > -255)) continue;
+      const h = (forest ? 6 : 3.2) + r() * 7, w = h * (0.26 + r() * 0.17);
+      S.cyl(x, y - 0.2, z, h * 0.047, h * 0.79, wood);
+      for (let j = 0; j < 7; j++) {
+        const angle = j * 2.4 + r() * 0.65;
+        const spread = j ? w * (0.4 + r() * 0.6) : 0;
+        const canopyY = y + h * (j ? 0.60 + r() * 0.29 : 0.96);
+        const size = w * (0.41 + r() * 0.43);
+        B.geo(leaf, x + Math.cos(angle) * spread, canopyY, z + Math.sin(angle) * spread,
+          [0x3f5b31, 0x4b6732, 0x5d7438, 0x657941][j % 4],
+          { sx: size * 1.1, sy: size * 0.75, sz: size, ry: angle, rz: (r() - 0.5) * 0.35 });
+      }
+    }
+    // Crossed grass blades fill the playable foreground without separate draw calls.
+    const grass = new THREE.BufferGeometry();
+    grass.setAttribute('position', new THREE.Float32BufferAttribute([
+      -0.16, 0, 0, 0.13, 0, 0, 0.21, 1, 0.08,
+      0, 0, -0.14, 0, 0, 0.16, 0.05, 0.78, 0.19,
+      0.1, 0, -0.09, -0.1, 0, 0.1, -0.17, 0.62, -0.04,
+    ], 3));
+    grass.setIndex([0, 1, 2, 2, 1, 0, 3, 4, 5, 5, 4, 3, 6, 7, 8, 8, 7, 6]);
+    // Authored upward-facing normals keep the thin blades readable on both sides.
+    grass.setAttribute('normal', new THREE.Float32BufferAttribute(Array.from({ length: 9 }, () => [0, 1, 0]).flat(), 3));
+    for (let i = 0; i < 13000; i++) {
+      const x = (r() - 0.5) * 350, z = -30 + (r() - 0.5) * 440, y = S.h(x, z);
+      if (y < -0.75 || !S.isFree(x, z, 0.5) || (Math.abs(x) < 40 && z > -176 && z < -124)) continue;
+      if (noise2(x / 11, z / 11, 16) < 0.28) continue;
+      const h = 0.14 + r() * 0.49;
+      B.geo(grass, x, y - 0.02, z, [0x596d32, 0x748341, 0x88904a, 0x657b38][i % 4],
+        { sx: 0.66 + r(), sy: h, sz: 0.66 + r(), ry: r() * Math.PI * 2 });
+    }
+    for (let i = 0; i < 450; i++) {
+      const x = (r() - 0.5) * 340, z = 30 + (r() - 0.5) * 360, y = S.h(x, z);
+      if (y < -0.8 || !S.isFree(x, z, 1)) continue;
+      const h = 0.16 + r() * 0.5;
+      B.geo(GEO.cone, x, y + h * 0.45, z, i % 3 ? 0x778742 : 0x9c9c5b, { sx: 0.21, sy: h, sz: 0.18, rz: (r() - 0.5) * 0.45 });
+      if (i % 7 === 0) B.geo(leaf, x, y + h, z, i % 2 ? 0xd2ad54 : 0xccc0bb, { sx: 0.11, sy: 0.05, sz: 0.11 });
+    }
+    S.poi('field', 'Shire Landing Field', 0, 120, 42, 20, 'A small landing field at the edge of green country. Follow the trail north to the bridge.');
+  }
+
   // ---------- procedural outpost ----------
   buildOutpost() {
     const S = this, r = rng(S.seed), e = S.env; S.pad = { x: 0, y: e.lift || 0, z: 120, yaw: 0 };
@@ -532,7 +679,10 @@ export class Surface {
   finalize() {
     const e = this.env;
     const add = (m) => m && this.group.add(m);
-    add(this.b.solid.mesh(MAT.solid)); add(this.b.win.mesh(makeWindowMats(e.winI, this.key === 'trantor' ? 0.55 : 0.4)));
+    const shire = this.key === 'korell';
+    const solids = this.b.solid.mesh(shire ? shireMaterial(false) : MAT.solid);
+    if (solids && shire) solids.castShadow = solids.receiveShadow = true;
+    add(solids); add(this.b.win.mesh(makeWindowMats(e.winI, this.key === 'trantor' ? 0.55 : 0.4)));
     add(this.b.glow.mesh(MAT.glow)); add(this.b.glass.mesh(MAT.glass));
     // crowd
     const r = rng(this.seed + 9); this.walkers = [];
@@ -570,6 +720,11 @@ export class Surface {
       this.wBody.instanceMatrix.needsUpdate = true; this.wHead.instanceMatrix.needsUpdate = true;
     }
   }
-  dispose() { this.group.traverse((o) => { if (o.geometry && !Object.values(GEO).includes(o.geometry)) o.geometry.dispose(); }); }
+  dispose() {
+    this.group.traverse((o) => {
+      if (o.geometry && !Object.values(GEO).includes(o.geometry)) o.geometry.dispose();
+      if (this.key === 'korell' && (o.material?.isShaderMaterial || o.material?.isMeshStandardMaterial)) o.material.dispose();
+    });
+  }
 }
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _p = new THREE.Vector3(), _s1 = new THREE.Vector3(1, 1, 1);

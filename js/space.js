@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Batch, MAT, canvasTex, rng, hashStr, fbm3, smooth, clamp } from './util.js';
+import { Batch, MAT, canvasTex, rng, hashStr, fbm2, fbm3, smooth, clamp } from './util.js';
 
 export const PLANET_R = 4000;
 const _v = new THREE.Vector3(), _c = new THREE.Color(), _c2 = new THREE.Color(), _m4 = new THREE.Matrix4(), _o = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
@@ -9,12 +9,19 @@ export class Backdrop {
   constructor(scene) {
     this.root = new THREE.Group(); scene.add(this.root);
     this.skyMat = new THREE.ShaderMaterial({
-      uniforms: { zen: { value: new THREE.Color() }, hor: { value: new THREE.Color() }, sunDir: { value: new THREE.Vector3(0, 1, 0) }, sunCol: { value: new THREE.Color() }, sp: { value: 0 } },
+      uniforms: { zen: { value: new THREE.Color() }, hor: { value: new THREE.Color() }, sunDir: { value: new THREE.Vector3(0, 1, 0) }, sunCol: { value: new THREE.Color() }, sp: { value: 0 }, clouds: { value: 0 }, cloudMap: { value: null }, cloudTime: { value: 0 } },
       vertexShader: 'varying vec3 vDir; void main(){ vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
-      fragmentShader: `uniform vec3 zen; uniform vec3 hor; uniform vec3 sunDir; uniform vec3 sunCol; uniform float sp; varying vec3 vDir;
+      fragmentShader: `uniform vec3 zen; uniform vec3 hor; uniform vec3 sunDir; uniform vec3 sunCol; uniform float sp; uniform float clouds; uniform sampler2D cloudMap; uniform float cloudTime; varying vec3 vDir;
         void main(){ vec3 d = normalize(vDir); float h = max(d.y, 0.0); vec3 c = mix(hor, zen, pow(h, 0.5));
           if (d.y < 0.0) c = mix(hor, hor * 0.55, min(1.0, -d.y * 4.0));
           float s = max(dot(d, sunDir), 0.0); c += sunCol * (pow(s, 12.0) * 0.22 + pow(s, 90.0) * 0.4);
+          if (clouds > 0.0 && d.y > 0.025) {
+            vec2 uv = d.xz / (d.y + 0.24) * 0.23 + vec2(cloudTime * 0.002, 0.0);
+            float vapor = texture2D(cloudMap, uv).r;
+            float cloud = smoothstep(0.41, 0.69, vapor) * smoothstep(0.025, 0.24, d.y);
+            vec3 cloudColor = mix(vec3(0.50, 0.54, 0.55), vec3(0.92, 0.86, 0.74), smoothstep(0.46, 0.76, vapor) + s * 0.13);
+            c = mix(c, cloudColor, cloud * clouds);
+          }
           c *= (1.0 - sp); c += sunCol * (pow(s, 700.0) * 4.0 + pow(s, 60.0) * 0.15 * sp);
           gl_FragColor = vec4(c, 1.0);
           #include <colorspace_fragment>
@@ -51,7 +58,26 @@ export class Backdrop {
   set(env, alt) {
     const sp = env ? alt : 1;
     this.sky.visible = !!env;
-    if (env) { const u = this.skyMat.uniforms; u.zen.value.set(env.zen); u.hor.value.set(env.hor); u.sunDir.value.set(...env.sun).normalize(); u.sunCol.value.set(env.sunCol); u.sp.value = alt; }
+    if (env) { const u = this.skyMat.uniforms; u.zen.value.set(env.zen); u.hor.value.set(env.hor); u.sunDir.value.set(...env.sun).normalize(); u.sunCol.value.set(env.sunCol); u.sp.value = alt;
+      u.clouds.value = env.clouds ? 1 - alt : 0;
+      if (env.clouds && !u.cloudMap.value) {
+        u.cloudMap.value = canvasTex(256, 256, (ctx, w, h) => {
+          const pixels = ctx.createImageData(w, h);
+          for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+            const u = x / w, v = y / h, k = (x + y * w) * 4;
+            const a = u * 6, b = v * 6;
+            const top = fbm2(a, b, 70) * (1 - u) + fbm2(a - 6, b, 70) * u;
+            const bottom = fbm2(a, b - 6, 70) * (1 - u) + fbm2(a - 6, b - 6, 70) * u;
+            const value = 255 * (top * (1 - v) + bottom * v);
+            pixels.data[k] = pixels.data[k + 1] = pixels.data[k + 2] = value;
+            pixels.data[k + 3] = 255;
+          }
+          ctx.putImageData(pixels, 0, 0);
+        }, true);
+        u.cloudMap.value.colorSpace = THREE.NoColorSpace;
+      }
+      u.cloudTime.value = performance.now() / 1000;
+    }
     const so = env ? Math.max(env.stars, sp) : 1; this.starMat.color.setScalar(so); this.stars.visible = so > 0.02;
     const lo = this.rim * (env ? Math.max(env.lens ? 0.35 : 0, sp) : 1);
     this.lens.visible = lo > 0.02; this.lens.material.color.setScalar(lo * 0.8);

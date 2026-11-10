@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { G, clamp, lerp, smooth, moveBody } from './util.js';
 import { SYS, dist } from './data.js';
+import { Explorer, clipBoom } from './explorer.js';
 import { Ship } from './ship.js';
 import { Surface } from './world.js';
 import { Backdrop, SpaceScene, Tunnel, PLANET_R } from './space.js';
@@ -27,19 +28,27 @@ function persist() {
 // ---------- renderer ----------
 const canvas = $('c');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true });
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
 const scene = new THREE.Scene(); scene.background = new THREE.Color(0x000000);
 const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 3e6);
 const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1), sun = new THREE.DirectionalLight(0xffffff, 2), amb = new THREE.AmbientLight(0xffffff, 0.3);
 scene.add(hemi, sun, amb, sun.target);
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -65, right: 65, top: 65, bottom: -65, near: 1, far: 290 });
+sun.shadow.camera.updateProjectionMatrix();
+sun.shadow.normalBias = 0.035;
+sun.shadow.bias = -0.00015;
 const backdrop = new Backdrop(scene);
 const ship = new Ship(); scene.add(ship.group);
+const explorer = new Explorer(); scene.add(explorer.group);
 const tunnel = new Tunnel(); ship.group.add(tunnel.mesh);
 function resize() { renderer.setSize(innerWidth, innerHeight, false); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
 addEventListener('resize', resize); resize();
 
-const player = { frame: 'world', x: 0, y: 0, z: 0, vy: 0, onGround: true, yaw: 0, pitch: 0, seated: false, stepAcc: 0 };
-let view = 'cockpit', camQ = new THREE.Quaternion(), shake = 0, charge = 0, lastEvt = 0, poiT = 0, saveT = 0, current = null;
+const player = { frame: 'world', x: 0, y: 0, z: 0, vy: 0, onGround: true, yaw: 0, pitch: 0, seated: false, speed: 0, stepAcc: 0 };
+let view = 'chase', camQ = new THREE.Quaternion(), shake = 0, charge = 0, lastEvt = 0, poiT = 0, saveT = 0, current = null;
 const stick = { x: 0, y: 0 }, keys = {};
 Object.assign(G, { ui, audio, ship, player, scene, camera, mode: 'surface', sys: SYS[G.save.sys], surface: null, space: null, trans: null, hyper: null, started: false });
 
@@ -57,10 +66,11 @@ function setMode(m) {
   if (G.surface) G.surface.group.visible = m === 'surface';
   if (G.space) G.space.group.visible = m === 'space';
   if (m === 'surface') {
-    const e = G.surface.env; scene.fog = new THREE.Fog(e.fog, 80, e.fogFar);
+    const e = G.surface.env; sun.castShadow = G.surface.key === 'korell'; scene.fog = new THREE.Fog(e.fog, 80, e.fogFar);
     hemi.color.set(e.zen).lerp(new THREE.Color(0xffffff), 0.55); hemi.groundColor.set(e.pal[0]).multiplyScalar(0.6); hemi.intensity = e.hemi;
-    sun.color.set(e.sunCol); sun.intensity = e.sunI; sun.position.set(...e.sun); amb.intensity = 0.22;
+    sun.color.set(e.sunCol); sun.intensity = e.sunI; sun.target.position.set(0, 0, 0); sun.position.set(...e.sun); amb.intensity = 0.22;
   } else {
+    sun.castShadow = false; sun.target.position.set(0, 0, 0);
     scene.fog = null; hemi.intensity = 0; amb.intensity = m === 'space' ? 0.28 : 0.6;
     if (G.space) { sun.color.set(G.sys.star).lerp(new THREE.Color(0xffffff), 0.5); sun.intensity = 3; sun.position.copy(G.space.sunDir); }
     backdrop.set(null, 1);
@@ -75,7 +85,7 @@ function placeLanded(p) {
 }
 function standBesideShip() {
   const w = ship.group.localToWorld(_a.set(8.5, 0, 20)); player.frame = 'world'; player.seated = false;
-  player.x = w.x; player.z = w.z; player.y = G.surface.h(w.x, w.z); player.yaw = ship.yaw + 0.58; player.pitch = 0.06; player.vy = 0;
+  player.x = w.x; player.z = w.z; player.y = G.surface.h(w.x, w.z); player.yaw = ship.yaw + 0.58; player.pitch = -0.12; player.vy = 0;
 }
 
 // ---------- input ----------
@@ -207,6 +217,7 @@ const surfEnv = { atmo: true, vmax: 190, boost: 2, ground: (x, z, y) => G.surfac
 const spaceEnv = { atmo: false, vmax: 330, boost: 3.2 };
 
 function updatePlayer(dt) {
+  const startX = player.x, startZ = player.z, startFrame = player.frame;
   const k = keys, look = 1.9 * dt;
   player.yaw += ((k.ArrowLeft ? 1 : 0) - (k.ArrowRight ? 1 : 0)) * look; player.pitch = clamp(player.pitch + ((k.ArrowUp ? 1 : 0) - (k.ArrowDown ? 1 : 0)) * look, -1.5, 1.5);
   const f = (k.KeyW ? 1 : 0) - (k.KeyS ? 1 : 0), s = (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0), inShip = player.frame === 'ship';
@@ -227,10 +238,54 @@ function updatePlayer(dt) {
       if (Math.abs(l.x) < 10.6 && l.z > -17 && l.z < 15 && l.y > -2 && l.y < 8) { player.frame = 'ship'; player.x = l.x; player.y = Math.max(0, l.y); player.z = l.z; player.yaw -= ship.yaw; }
     }
   }
+  player.speed = startFrame === player.frame ? Math.hypot(player.x - startX, player.z - startZ) / Math.max(dt, 0.001) : 0;
   if (player.onGround && (dx || dz)) { player.stepAcc += Math.hypot(dx, dz); if (player.stepAcc > 2.1) { player.stepAcc = 0; audio.sfx('step'); } }
 }
-const eye = V(), fwd = V();
+const eye = V(), fwd = V(), pivot = V(), desired = V(), sample = V();
+function walkCamera(dt) {
+  const inShip = player.frame === 'ship';
+  const yaw = player.yaw, pitch = clamp(player.pitch, -0.95, 0.66);
+  const body = explorer.group;
+  body.position.set(player.x, player.y, player.z);
+  body.quaternion.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, yaw);
+  if (inShip) {
+    ship.group.localToWorld(body.position);
+    body.quaternion.premultiply(ship.quat);
+  }
+  explorer.animate(dt, player.speed, player.onGround);
+
+  camera.quaternion.setFromEuler(_e.set(pitch, yaw, 0, 'YXZ'));
+  pivot.set(player.x, player.y + 1.48, player.z);
+  desired.set(inShip ? 0.48 : 0.88, 0, inShip ? 1.65 : 4.4)
+    .applyQuaternion(camera.quaternion).add(pivot);
+  let clear = 1;
+  if (inShip) {
+    clear = clipBoom(pivot, desired, ship.solids);
+    camera.quaternion.premultiply(ship.quat);
+    ship.group.localToWorld(pivot);
+    ship.group.localToWorld(desired);
+  } else {
+    const surface = G.surface;
+    clear = clipBoom(pivot, desired, surface.solids);
+    if (ship.landed) {
+      clear = clipBoom(ship.group.worldToLocal(_a.copy(pivot)), ship.group.worldToLocal(_b.copy(desired)), ship.solids, clear);
+    }
+    // Underground interiors use their walls and ceilings as the camera bounds.
+    const terrain = surface.walkEnv().terrain;
+    if (pivot.y >= terrain(pivot.x, pivot.z)) {
+      for (let t = 0.05; t <= clear; t += 0.05) {
+        sample.copy(pivot).lerp(desired, t);
+        if (sample.y < terrain(sample.x, sample.z) + 0.15) { clear = t - 0.05; break; }
+      }
+    }
+  }
+  camera.position.copy(pivot).lerp(desired, clear);
+  body.visible = camera.position.distanceToSquared(pivot) > 0.25;
+  // Reach and interaction direction originate with the character.
+  eye.copy(pivot).addScaledVector(_a.set(0, 1, 0).applyQuaternion(body.quaternion), 0.14);
+}
 function updateCamera(dt) {
+  explorer.group.visible = !player.seated;
   if (player.seated) {
     if (view === 'cockpit') { camera.position.copy(ship.group.localToWorld(_a.copy(ship.seatEye))); camera.quaternion.copy(ship.quat); }
     else {
@@ -238,11 +293,9 @@ function updateCamera(dt) {
       camera.position.copy(ship.pos).addScaledVector(ship.up(_a), 2.7).add(_b.set(0, 7, 40).applyQuaternion(camQ));
       if (G.mode === 'surface') { const g = G.surface.ground(camera.position.x, camera.position.z, camera.position.y + 50); if (camera.position.y < g + 1.5) camera.position.y = g + 1.5; }
     }
-  } else if (player.frame === 'ship') {
-    camera.position.copy(ship.group.localToWorld(_a.set(player.x, player.y + 1.62, player.z)));
-    camera.quaternion.copy(ship.quat).multiply(_q.setFromEuler(_e.set(player.pitch, player.yaw, 0, 'YXZ')));
-  } else { camera.position.set(player.x, player.y + 1.62, player.z); camera.quaternion.setFromEuler(_e.set(player.pitch, player.yaw, 0, 'YXZ')); }
-  eye.copy(camera.position); fwd.set(0, 0, -1).applyQuaternion(camera.quaternion);
+    eye.copy(camera.position);
+  } else walkCamera(dt);
+  fwd.set(0, 0, -1).applyQuaternion(camera.quaternion);
   if (shake > 0.001) { camera.position.x += (Math.random() - 0.5) * shake; camera.position.y += (Math.random() - 0.5) * shake; camera.position.z += (Math.random() - 0.5) * shake; shake *= Math.exp(-4 * dt); }
 }
 const W2 = V();
@@ -279,6 +332,11 @@ function tick(now) {
   ship.group.updateMatrixWorld(true);
   if (!player.seated && !blocked && !G.trans) updatePlayer(dt);
   updateCamera(dt);
+  if (sun.castShadow) {
+    const shadowX = Math.round(eye.x * 4) / 4, shadowZ = Math.round(eye.z * 4) / 4;
+    sun.target.position.set(shadowX, G.surface.h(shadowX, shadowZ), shadowZ);
+    sun.position.set(...G.surface.env.sun).multiplyScalar(155).add(sun.target.position);
+  }
 
   // --- world ---
   const marks = []; let hint = '', fl = null, jumpText = null;
@@ -330,7 +388,7 @@ function tick(now) {
   if (fl) fl.stick = document.pointerLockElement === canvas ? [stick.x, stick.y] : null;
   ui.flight(G.hyper ? null : fl); ui.jump(jumpText, charge);
   const h = G.sys.hand;
-  ui.loc(G.hyper && G.hyper.stage === 1 ? 'Hyperspace' : G.sys.name, G.hyper && G.hyper.stage === 1 ? 'between the stars' : G.mode === 'surface' ? (h === 'terminus' ? 'Terminus City' : h === 'anacreon' ? 'Royal capital' : h === 'trantor' ? (eye.y < -20 ? 'The Concourse · sub-level' : eye.y > 300 ? 'Observation Tower' : 'Sector Dock 12') : 'Landing field') : 'In orbit');
+  ui.loc(G.hyper && G.hyper.stage === 1 ? 'Hyperspace' : G.sys.name, G.hyper && G.hyper.stage === 1 ? 'between the stars' : G.mode === 'surface' ? (h === 'terminus' ? 'Terminus City' : h === 'anacreon' ? 'Royal capital' : h === 'trantor' ? (eye.y < -20 ? 'The Concourse · sub-level' : eye.y > 300 ? 'Observation Tower' : 'Sector Dock 12') : h === 'korell' ? 'Middle-earth · The Shire' : 'Landing field') : 'In orbit');
   ui.status();
   // --- audio ---
   const inAir = !ship.landed && !ship.docked, thr = player.seated || inAir ? clamp(Math.abs(ship.throttle) + (inp ? Math.abs(inp.vert) * 0.4 : 0) + (G.hyper ? 1 : 0), 0.06, 1.4) : 0;

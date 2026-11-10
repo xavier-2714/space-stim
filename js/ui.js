@@ -144,7 +144,7 @@ export const ui = {
   help() {
     const k = (a, b) => `<div><kbd>${a}</kbd>${b}</div>`;
     this.open(`<h2>Controls</h2>
-      <h3>On foot</h3><div class="keys">${k('W A S D', 'Walk')}${k('Mouse', 'Look (click to capture)')}${k('Shift', 'Run')}${k('Space', 'Jump')}${k('F', 'Talk / use / sit')}${k('← ↑ ↓ →', 'Look without mouse')}</div>
+      <h3>On foot</h3><div class="keys">${k('W A S D', 'Walk')}${k('Mouse', 'Orbit camera (click to capture)')}${k('Shift', 'Run')}${k('Space', 'Jump')}${k('F', 'Talk / use / sit')}${k('← ↑ ↓ →', 'Look without mouse')}</div>
       <h3>Flying</h3><div class="keys">${k('Space', 'Lift off · thrust up')}${k('C', 'Thrust down (to land)')}${k('W / S', 'Throttle up / down')}${k('Mouse', 'Pitch & yaw')}${k('A / D', 'Yaw')}${k('Q / E', 'Roll')}${k('Shift', 'Boost')}${k('X', 'Full stop')}${k('V', 'Cockpit / chase view')}${k('L', 'Landing assist')}${k('F', 'Leave the seat · dock')}${k('I', 'Invert pitch')}</div>
       <h3>Travelling</h3><div class="keys">${k('M', 'Galactic chart — pick a star')}${k('J', 'Hold to charge & jump')}${k('Tab', 'Journal')}${k('H', 'This help')}</div>
       <p style="font-size:13px;color:var(--dim)">To leave a world: sit in the pilot's seat, press Space to lift, point the nose up and climb. To reach another star: open the chart, plot a course inside your range ring, fly clear of the planet, put the nose on the marker and hold J. To land: fly at the planet, descend toward the port, then set down gently with C — or press L.</p>`, [], { foot: 'H or Esc to close' });
