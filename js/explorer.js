@@ -40,15 +40,15 @@ export class Explorer {
     }
   }
 
-  animate(dt, speed, grounded) {
+  animate(dt, speed, grounded, riding = false) {
     this.phase += dt * speed * 1.65;
     const swing = grounded ? Math.sin(this.phase) * Math.min(speed / 8, 0.85) : 0;
     const blend = 1 - Math.exp(-16 * dt);
     this.legs.forEach((leg, i) => {
-      const angle = i ? swing : -swing;
+      const angle = riding ? 0.36 : i ? swing : -swing;
       leg.rotation.x = THREE.MathUtils.lerp(leg.rotation.x, angle, blend);
       const arm = this.arms[i];
-      arm.rotation.x = THREE.MathUtils.lerp(arm.rotation.x, -angle * 0.65, blend);
+      arm.rotation.x = THREE.MathUtils.lerp(arm.rotation.x, riding ? 1.05 : -angle * 0.65, blend);
     });
   }
 }

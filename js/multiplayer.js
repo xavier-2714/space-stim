@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { motorcycleModel, poseMotorcycle } from './motorcycle.js';
 import { Explorer } from './explorer.js';
 
 const sendInterval = 50;
@@ -9,7 +10,9 @@ export class Multiplayer {
     this.systems = systems;
     this.avatar = new Explorer(0x60778d);
     this.avatar.group.visible = false;
-    scene.add(this.avatar.group);
+    this.peerBike = motorcycleModel();
+    this.peerBike.visible = false;
+    scene.add(this.avatar.group, this.peerBike);
     this.roomParam = new URL(location.href).searchParams.get('room');
     this.startButton = document.getElementById('start');
     this.status = document.getElementById('room-status');
@@ -130,7 +133,7 @@ export class Multiplayer {
     this.lastSent = now;
     const { player: p, ship, sys, mode, hyper } = game;
     const player = { system: sys.id, mode, frame: p.frame, x: p.x, y: p.y, z: p.z,
-      yaw: p.yaw, speed: p.seated ? 0 : p.speed, seated: p.seated, grounded: p.onGround };
+      yaw: p.yaw, riding: Boolean(p.riding), bikeSpeed: p.bikeSpeed || 0, speed: p.seated ? 0 : p.speed, seated: p.seated, grounded: p.onGround };
     if (p.seated) Object.assign(player, { x: 0, y: 1.4, z: -9.6, yaw: 0 });
     const state = { type: 'state', player };
     if (this.role === 'host') state.ship = { system: sys.id, mode, pos: ship.pos.toArray(),
@@ -142,6 +145,7 @@ export class Multiplayer {
   renderPeer(dt, game) {
     const remote = this.remote, body = this.avatar.group;
     body.visible = Boolean(this.paired && remote && remote.system === game.sys.id && remote.mode === game.mode);
+    this.peerBike.visible = Boolean(body.visible && remote.riding && remote.mode === 'surface' && remote.frame === 'world');
     if (!body.visible) { this.remoteFrame = null; return; }
     const frame = remote.system + ':' + remote.mode + ':' + remote.frame;
     this.offset.set(remote.x, remote.y - (remote.seated ? 0.38 : 0), remote.z);
@@ -154,6 +158,11 @@ export class Multiplayer {
       game.ship.group.localToWorld(body.position);
       body.quaternion.premultiply(game.ship.quat);
     }
-    this.avatar.animate(dt, THREE.MathUtils.clamp(remote.speed, 0, 10), remote.grounded);
+    if (this.peerBike.visible) {
+      poseMotorcycle(this.peerBike, { x: body.position.x, y: body.position.y, z: body.position.z,
+        yaw: remote.yaw, bikeSpeed: Number.isFinite(remote.bikeSpeed) ? THREE.MathUtils.clamp(remote.bikeSpeed, -6, 43) : 0 }, dt);
+      body.position.y -= 0.05;
+    }
+    this.avatar.animate(dt, THREE.MathUtils.clamp(remote.speed, 0, 10), remote.grounded, this.peerBike.visible);
   }
 }

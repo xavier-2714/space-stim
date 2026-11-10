@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { G, clamp, lerp, smooth, moveBody } from './util.js';
 import { SYS, dist } from './data.js';
 import { Explorer, clipBoom } from './explorer.js';
+import { parkMotorcycles, poseMotorcycle, rideMotorcycle } from './motorcycle.js';
 import { Multiplayer } from './multiplayer.js';
 import { Ship } from './ship.js';
 import { Surface } from './world.js';
@@ -46,6 +47,9 @@ const backdrop = new Backdrop(scene);
 const ship = new Ship(); scene.add(ship.group);
 const explorer = new Explorer(); scene.add(explorer.group);
 const multiplayer = new Multiplayer(scene, SYS);
+const parking = new THREE.Group();
+scene.add(parking);
+let motorcycles = [], mountedBike = null;
 const tunnel = new Tunnel(); ship.group.add(tunnel.mesh);
 function resize() { renderer.setSize(innerWidth, innerHeight, false); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
 addEventListener('resize', resize); resize();
@@ -61,11 +65,20 @@ G.setTarget = (id) => { G.save.target = id; persist(); if (id) { ui.toast(`Cours
 G.teleport = (d) => { audio.sfx('lift'); transition('#0b0e12', 0.4, () => { player.frame = 'world'; player.x = d.x; player.y = d.y; player.z = d.z; player.yaw = d.yaw; player.pitch = 0; player.vy = 0; }); };
 
 // ---------- environment ----------
-function ensureSurface() { if (!G.surface) { G.surface = new Surface(G.sys); scene.add(G.surface.group); } }
+function ensureSurface() {
+  if (!G.surface) {
+    G.surface = new Surface(G.sys);
+    scene.add(G.surface.group);
+    motorcycles = parkMotorcycles(G.surface, parking, multiplayer.role === 'guest');
+  }
+}
 function ensureSpace() { if (!G.space) { G.space = new SpaceScene(G.sys); scene.add(G.space.group); } }
-function disposeSystem() { for (const k of ['surface', 'space']) if (G[k]) { scene.remove(G[k].group); G[k].dispose(); G[k] = null; } }
+let surfaceTarget = null;
+function disposeSystem() { surfaceTarget = null; parking.clear(); motorcycles = []; mountedBike = null; player.riding = false; for (const k of ['surface', 'space']) if (G[k]) { scene.remove(G[k].group); G[k].dispose(); G[k] = null; } }
 function setMode(m) {
   G.mode = m;
+  parking.visible = m === 'surface';
+  if (m !== 'surface' && mountedBike) dismountMotorcycle();
   if (G.surface) G.surface.group.visible = m === 'surface';
   if (G.space) G.space.group.visible = m === 'space';
   if (m === 'surface') {
@@ -102,6 +115,15 @@ addEventListener('keydown', (e) => {
   if (G.hyper || G.trans) return;
   switch (e.code) {
     case 'KeyF': interact(); break;
+    case 'KeyN':
+      if (G.mode === 'surface' && G.surface.destinations) {
+        const opts = G.surface.destinations.map(p => ({
+          t: `${p.field}<small>${p.name} · ${p.detail}</small>`,
+          fn: () => { surfaceTarget = p; ui.close(); ui.toast(`Surface course set: <b>${p.field}</b>`); },
+        }));
+        ui.open('<h2>Korell surface atlas</h2><div class="sub">Middle-earth</div><p>Choose a landing field to mark it on your HUD. Pilots can press L in flight to land at the selected field.</p>', opts);
+      }
+      break;
     case 'KeyM': ui.toggleMap(true); break;
     case 'Tab': ui.journal(); break;
     case 'KeyH': ui.help(); break;
@@ -110,7 +132,7 @@ addEventListener('keydown', (e) => {
     case 'KeyL':
       if (player.seated && G.mode === 'surface' && !ship.landed) {
         if (ship.assist) { ship.assist = null; ui.toast('Landing assist off — you have the ship.'); }
-        else { const p = G.surface.pad; ship.startAssist({ x: p.x, z: p.z, yaw: p.yaw, y: G.surface.ground(p.x, p.z, (p.y || 0) + 3) }); ui.toast('Landing assist engaged — bringing her in to the port.', true); audio.sfx('ok'); }
+        else { const p = surfaceTarget || G.surface.pad; ship.startAssist({ x: p.x, z: p.z, yaw: p.yaw, cruiseY: G.surface.destinations ? 1200 : undefined, y: G.surface.ground(p.x, p.z, (p.y || 0) + 3) }); ui.toast('Landing assist engaged — bringing her in to the port.', true); audio.sfx('ok'); }
       } else if (player.seated && G.mode === 'space') ui.toast('Landing assist works inside an atmosphere. Fly at the planet first.');
       break;
   }
@@ -121,6 +143,7 @@ canvas.addEventListener('click', () => G.relock());
 addEventListener('mousemove', (e) => {
   if (document.pointerLockElement !== canvas || ui.modal || ui.mapOpen) return;
   if (player.seated) { stick.x = clamp(stick.x + e.movementX / 260, -1, 1); stick.y = clamp(stick.y + e.movementY / 260, -1, 1); }
+  else if (player.riding) { player.pitch = clamp(player.pitch - e.movementY * 0.0023, -0.8, 0.45); }
   else { player.yaw -= e.movementX * 0.0023; player.pitch = clamp(player.pitch - e.movementY * 0.0023, -1.5, 1.5); }
 });
 
@@ -133,7 +156,21 @@ const shipActs = [
 ];
 function sit() { if (multiplayer.role === 'guest') return; player.seated = true; player.frame = 'ship'; stick.x = stick.y = 0; camQ.copy(ship.quat); audio.sfx('ok'); }
 function stand() { player.seated = false; player.frame = 'ship'; player.x = 0; player.y = 1.4; player.z = -8.4; player.yaw = Math.PI; player.pitch = 0; player.vy = 0; ship.throttle = 0; ship.assist = null; if (!ship.landed) ui.toast('Drives idle. The ship will hold here.'); }
+function mountMotorcycle(bike) {
+  mountedBike = bike;
+  Object.assign(player, { x: bike.x, y: bike.y, z: bike.z, yaw: bike.yaw, pitch: -0.18,
+    riding: true, bikeSpeed: 0, bikeLean: 0, speed: 0, vy: 0, onGround: true });
+  audio.sfx('ok');
+}
+function dismountMotorcycle() {
+  Object.assign(mountedBike, { x: player.x, y: player.y, z: player.z, yaw: player.yaw });
+  poseMotorcycle(mountedBike.model, mountedBike, 0);
+  mountedBike = null;
+  player.riding = false;
+  player.speed = 0;
+}
 function findInteract(eye, fwd) {
+  if (mountedBike) return { label: 'Park motorcycle and get off', act: dismountMotorcycle };
   let best = null, bd = 1e9;
   const test = (pos, r, label, act) => { const d = pos.distanceTo(eye); if (d > r || d >= bd || !label) return; if (d > 1.4 && _c.copy(pos).sub(eye).normalize().dot(fwd) < 0.3) return; bd = d; best = { label, act }; };
   if (player.seated) {
@@ -144,6 +181,9 @@ function findInteract(eye, fwd) {
   }
   if (player.frame === 'ship') for (const s of shipActs) test(ship.group.localToWorld(_b.copy(s.l)), s.r, s.label(), s.act);
   else if (G.mode === 'surface') for (const s of G.surface.interacts) test(s.pos, s.r, s.label, s.act);
+  if (player.frame === 'world' && G.mode === 'surface') {
+    for (const bike of motorcycles) test(_b.set(bike.x, bike.y + 1, bike.z), 3.4, 'Ride motorcycle', () => mountMotorcycle(bike));
+  }
   return best;
 }
 function interact() { if (current && current.act) current.act(); }
@@ -169,9 +209,10 @@ function toSurface() {
 }
 function onLanded() {
   audio.sfx('land'); shake = 0.5; persist();
-  const p = G.surface.pad, atPort = Math.hypot(ship.pos.x - p.x, ship.pos.z - p.z) < 60;
+  const ports = G.surface.destinations || [G.surface.pad];
+  const atPort = ports.find(p => Math.hypot(ship.pos.x - p.x, ship.pos.z - p.z) < 60);
   const next = multiplayer.role === 'guest' ? 'Ramp lowering. You can disembark when it opens.' : 'Ramp lowering. Press F to leave your seat.';
-  ui.toast(`<b>Touchdown</b> — ${G.sys.name}${atPort ? ' spaceport' : ', open country'}<small>${next}</small>`, true);
+  ui.toast(`<b>Touchdown</b> — ${G.sys.name}${atPort ? ' · ' + (atPort.field || 'spaceport') : ', open country'}<small>${next}</small>`, true);
 }
 
 // ---------- hyperspace ----------
@@ -244,10 +285,12 @@ function followHost(dt) {
   ship.updateEffects();
   ship.group.updateMatrixWorld(true);
   if (first && s.mode === 'surface' && s.landed) {
+    motorcycles = parkMotorcycles(G.surface, parking, true);
     standBesideShip();
     const w = ship.group.localToWorld(_a.set(-8.5, 0, 20));
     player.x = w.x; player.z = w.z; player.y = G.surface.h(w.x, w.z); player.yaw = ship.yaw - 0.58;
   } else if (first || (player.frame === 'world' && !s.landed)) {
+    if (mountedBike) dismountMotorcycle();
     Object.assign(player, { frame: 'ship', x: 0, y: 1.4, z: 3, yaw: 0, pitch: 0, vy: 0, speed: 0 });
   }
   player.seated = false;
@@ -276,6 +319,11 @@ const surfEnv = { atmo: true, vmax: 190, boost: 2, ground: (x, z, y) => G.surfac
 const spaceEnv = { atmo: false, vmax: 330, boost: 3.2 };
 
 function updatePlayer(dt) {
+  if (mountedBike) {
+    rideMotorcycle(player, keys, dt, G.surface.walkEnv());
+    poseMotorcycle(mountedBike.model, player, dt);
+    return;
+  }
   const startX = player.x, startZ = player.z, startFrame = player.frame;
   const k = keys, look = 1.9 * dt;
   player.yaw += ((k.ArrowLeft ? 1 : 0) - (k.ArrowRight ? 1 : 0)) * look; player.pitch = clamp(player.pitch + ((k.ArrowUp ? 1 : 0) - (k.ArrowDown ? 1 : 0)) * look, -1.5, 1.5);
@@ -305,17 +353,17 @@ function walkCamera(dt) {
   const inShip = player.frame === 'ship';
   const yaw = player.yaw, pitch = clamp(player.pitch, -0.95, 0.66);
   const body = explorer.group;
-  body.position.set(player.x, player.y, player.z);
+  body.position.set(player.x, player.y - (player.riding ? 0.05 : 0), player.z);
   body.quaternion.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, yaw);
   if (inShip) {
     ship.group.localToWorld(body.position);
     body.quaternion.premultiply(ship.quat);
   }
-  explorer.animate(dt, player.speed, player.onGround);
+  explorer.animate(dt, player.speed, player.onGround, player.riding);
 
   camera.quaternion.setFromEuler(_e.set(pitch, yaw, 0, 'YXZ'));
   pivot.set(player.x, player.y + 1.48, player.z);
-  desired.set(inShip ? 0.48 : 0.88, 0, inShip ? 1.65 : 4.4)
+  desired.set(inShip ? 0.48 : 0.88, 0, inShip ? 1.65 : player.riding ? 5.3 : 4.4)
     .applyQuaternion(camera.quaternion).add(pivot);
   let clear = 1;
   if (inShip) {
@@ -416,20 +464,35 @@ function tick(now) {
   }
 
   // --- world ---
-  const marks = []; let hint = '', fl = null, jumpText = null;
+  const marks = []; let hint = '', fl = null, jumpText = null, surfaceRegion = '';
   if (G.mode === 'surface') {
     const S = G.surface, e = S.env; S.update(dt, eye);
+    if (S.destinations) {
+      let closest = Infinity;
+      for (const region of S.destinations) {
+        const distance = Math.hypot(eye.x - region.x, eye.z - region.z);
+        if (distance < closest) { closest = distance; surfaceRegion = region.name; }
+      }
+      if (surfaceTarget && !player.seated) {
+        const distance = Math.hypot(eye.x - surfaceTarget.x, eye.z - surfaceTarget.z);
+        if (distance > 42) marker(marks, _a.set(surfaceTarget.x, surfaceTarget.y + 7, surfaceTarget.z), surfaceTarget.field, km(distance), '#f0c070');
+      }
+    }
     const alt = smooth(500, 2600, eye.y - (S.pad.y || 0)); backdrop.set(e, alt); scene.fog.far = e.fogFar * (1 + alt * 3); scene.fog.color.set(e.fog).multiplyScalar(1 - alt * 0.85);
     hemi.intensity = e.hemi * (1 - alt * 0.6);
     if (!passenger && !ship.landed && ship.pos.y - (S.pad.y || 0) > 2600 && !G.trans) toSpace();
     if (!player.seated) {
       if ((poiT += dt) > 0.4) { poiT = 0; for (const p of S.pois) if (!G.save.found[p.id] && Math.hypot(eye.x - p.x, eye.z - p.z) < p.r && (p.y === null || Math.abs(eye.y - 1.6 - p.y) < 8)) { G.save.found[p.id] = 1; G.save.credits += p.reward; G.changed(); audio.sfx('found'); ui.toast(`Discovered: <b>${p.name}</b> · +${p.reward} cr<small>${p.text}</small>`, true, 8000); } }
+      if (!mountedBike && player.frame === 'world') for (const bike of motorcycles) {
+        const distance = Math.hypot(eye.x - bike.x, eye.z - bike.z);
+        if (distance > 4 && distance < 80) marker(marks, _a.set(bike.x, bike.y + 1.7, bike.z), 'Motorcycle', km(distance), '#efbc8a');
+      }
       const ds = Math.hypot(eye.x - ship.pos.x, eye.z - ship.pos.z); if (ds > 60 && eye.y > -20 && eye.y < 300) marker(marks, _a.copy(ship.pos).setY(ship.pos.y + 9), 'Your ship', km(ds), '#5fd8c8');
       if (player.frame === 'world' && ds < 40 && !G.save.found[G.sys.id + ':boarded']) hint = passenger ? 'Walk up the rear ramp to board your friend’s ship' : 'Walk up the ramp at the rear of your ship and take the pilot\'s seat';
     } else {
       G.save.found[G.sys.id + ':boarded'] = 1;
-      const p = S.pad, dp = Math.hypot(ship.pos.x - p.x, ship.pos.z - p.z);
-      if (!ship.landed && dp > 80) marker(marks, _a.set(p.x, (p.y || 0) + 10, p.z), 'Spaceport', km(dp), '#f0c070');
+      const p = surfaceTarget || S.pad, dp = Math.hypot(ship.pos.x - p.x, ship.pos.z - p.z);
+      if (!ship.landed && dp > 80) marker(marks, _a.set(p.x, (p.y || 0) + 10, p.z), p.field || 'Spaceport', km(dp), '#f0c070');
       hint = ship.landed ? '<kbd>Space</kbd>lift off &nbsp; <kbd>F</kbd>leave seat &nbsp; <kbd>M</kbd>chart' : ship.assist ? 'Landing assist flying — touch <kbd>W</kbd> or <kbd>S</kbd> to take over' : (ship.alt < 60 ? '<kbd>C</kbd>descend gently to land &nbsp; <kbd>Space</kbd>rise' : ship.pos.y > 1200 ? 'Keep climbing to reach orbit' : '<kbd>L</kbd>landing assist &nbsp; <kbd>V</kbd>view');
       fl = { spd: ship.speed(), thr: ship.throttle, alt: fmt(Math.max(0, ship.alt ?? 0)) + ' m', altl: 'ALTITUDE', mode: ship.landed ? 'LANDED' : ship.assist ? 'ASSIST' : ship.speed() < 2 ? 'HOVER' : 'FLIGHT' };
     }
@@ -461,11 +524,13 @@ function tick(now) {
   current = blocked || G.hyper || G.trans ? null : findInteract(eye, fwd);
   ui.prompt(current && current.label && !current.quiet ? current.label : null);
   if (current && current.hint) hint = current.hint;
+  if (mountedBike) hint = '<kbd>W</kbd>throttle · <kbd>A/D</kbd>steer · <kbd>Space</kbd>brake · <kbd>Shift</kbd>boost · ' + fmt(Math.abs(player.bikeSpeed) * 3.6) + ' km/h';
+  if (surfaceRegion) hint += ' &nbsp; <kbd>N</kbd>surface atlas';
   ui.hint(G.hyper ? '' : hint); ui.markers(G.hyper || blocked ? [] : marks);
   if (fl) fl.stick = document.pointerLockElement === canvas ? [stick.x, stick.y] : null;
   ui.flight(G.hyper ? null : fl); ui.jump(jumpText, charge);
   const h = G.sys.hand;
-  ui.loc(G.mode === 'hyper' ? 'Hyperspace' : G.sys.name, G.mode === 'hyper' ? 'between the stars' : G.mode === 'surface' ? (h === 'terminus' ? 'Terminus City' : h === 'anacreon' ? 'Royal capital' : h === 'trantor' ? (eye.y < -20 ? 'The Concourse · sub-level' : eye.y > 300 ? 'Observation Tower' : 'Sector Dock 12') : h === 'korell' ? 'Middle-earth · The Shire' : 'Landing field') : 'In orbit');
+  ui.loc(G.mode === 'hyper' ? 'Hyperspace' : G.sys.name, G.mode === 'hyper' ? 'between the stars' : G.mode === 'surface' ? (h === 'terminus' ? 'Terminus City' : h === 'anacreon' ? 'Royal capital' : h === 'trantor' ? (eye.y < -20 ? 'The Concourse · sub-level' : eye.y > 300 ? 'Observation Tower' : 'Sector Dock 12') : h === 'korell' ? 'Middle-earth · ' + surfaceRegion : 'Landing field') : 'In orbit');
   ui.status();
   // --- audio ---
   const inAir = !ship.landed && !ship.docked, thr = player.seated || inAir ? clamp(Math.abs(ship.throttle) + (inp ? Math.abs(inp.vert) * 0.4 : 0) + (G.hyper ? 1 : 0), 0.06, 1.4) : 0;

@@ -55,7 +55,7 @@ const BOOK = [
     desc: 'A dim star of the Sirius Sector that appears in every learned footnote on the Origin Question.' },
   { id: 'korell', name: 'Korell', x: 10600, y: -8700, type: 'warm', hand: 'korell', econ: 'frontier', star: 0xffdcb0, moons: 1,
     faction: 'Outer province · ties to the Empire lapsing', pop: 'unknown',
-    desc: 'A Middle-earth crossover world. Land in the Shire and follow the Water toward Hobbiton and the Old Forest.' },
+    desc: 'A Middle-earth crossover world. Fly from the Shire to the Grey Havens, Rivendell, Rohan, Minas Tirith and Mordor.' },
   { id: 'askone', name: 'Askone', x: 11400, y: -2900, type: 'jungle', econ: 'agri', star: 0xfff0c8, moons: 2,
     faction: 'Outer province · ties to the Empire lapsing', pop: 'unknown',
     desc: 'A remote, inward-looking world of the far Periphery, seldom visited.' },

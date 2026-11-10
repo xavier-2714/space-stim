@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { G, Batch, MAT, makeWindowMats, signMesh, canvasTex, rng, hashStr, fbm2, noise2, smooth, clamp, lerp } from './util.js';
 import { shireMaterial, shireWater } from './shire-materials.js';
+import { buildMiddleEarth, middleEarthHeight } from './middle-earth.js';
 import { NPCS } from './data.js';
 
 // sky / light / terrain settings per planet type
@@ -51,7 +52,10 @@ export class Surface {
     if (sys.hand === 'terminus') this.buildTerminus();
     else if (sys.hand === 'anacreon') this.buildAnacreon();
     else if (sys.hand === 'trantor') this.buildTrantor();
-    else if (sys.hand === 'korell') this.buildKorell();
+    else if (sys.hand === 'korell') {
+      this.buildKorell();
+      buildMiddleEarth(this);
+    }
     else this.buildOutpost();
     if (this.key !== 'korell') this.scatter();
     this.finalize();
@@ -60,15 +64,7 @@ export class Surface {
   // ---------- terrain ----------
   rawH(x, z) {
     const e = this.env; if (!e.amp) return 0;
-    if (this.key === 'korell') {
-      const river = -64 + 65 * Math.sin(x / 290) ** 3;
-      const bank = smooth(16, 60, Math.abs(z - river));
-      const hills = fbm2(x / 270, z / 270, 21, 4) * 100;
-      const local = smooth(185, 470, Math.hypot(x, z));
-      const ridge = Math.exp(-(((x - 2250) / 750) ** 2)) * smooth(450, 2000, Math.hypot(x, z));
-      const peaks = fbm2(x / 410, z / 530, 18, 5) * 860;
-      return -8 * (1 - bank) + bank * hills * local + ridge * peaks;
-    }
+    if (this.key === 'korell') return middleEarthHeight(x, z);
     const d = Math.hypot(x, z), f = smooth(e.flatR, e.flatR + 700, d);
     const base = e.lift || 0;
     let v = (fbm2(x / 900 + 31, z / 900 + 17, this.seed & 1023, 5) - 0.43) * e.amp;
@@ -100,6 +96,10 @@ export class Surface {
       c.lerp(c2.set(P[3]), smooth(0.62, 0.85, t));
       if (H[i] < wl + 2) c.lerp(c2.set(0x9a9070), 0.6);
       c.lerp(c2.set(e.town), 1 - smooth(e.flatR * 0.55, e.flatR + 150, d));
+      if (this.key === 'korell') {
+        const ash = smooth(4870, 5450, x) * (1 - smooth(1800, 2700, Math.abs(z - 2000)));
+        c.lerp(c2.set(0x49403b), ash * (0.76 + 0.24 * noise2(x / 55, z / 55, 35)));
+      }
       c.multiplyScalar(0.9 + noise2(x / 60, z / 60, 9) * 0.2);
       col.set([c.r, c.g, c.b], i * 3);
     }

@@ -215,8 +215,9 @@ export class Ship {
     const tx = p.x - this.pos.x, tz = p.z - this.pos.z, d = Math.hypot(tx, tz);
     const hoverY = p.y + 70;
     if (a.phase === 0) {
-      const ty = hoverY - this.pos.y;
-      const sp = clamp(d * 0.45, 2.5, 170);
+      const cruiseY = p.cruiseY && d > 55 ? p.cruiseY : hoverY;
+      const ty = cruiseY - this.pos.y;
+      const sp = p.cruiseY && d > 55 && this.pos.y < p.cruiseY - 55 ? 0 : clamp(d * 0.45, 2.5, 170);
       _f.set(tx, 0, tz).normalize().multiplyScalar(sp); _f.y = clamp(ty * 0.6, -75, 60);
       this.vel.lerp(_f, 1 - Math.exp(-1.6 * dt));
       const yaw = d > 25 ? Math.atan2(-tx, -tz) : p.yaw;
